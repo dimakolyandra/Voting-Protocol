@@ -13,6 +13,7 @@ class ServerVote:
         self.data_of_constituency = []
         self.cryptographer = crypt.Cryptographer()
         self.encrypt_results = []
+        self.is_end_of_voting = False
         self.form_of_voting = [
             {'FIO': 'Ivanov Ivan Ivanovich',
              'rating': ''},
@@ -36,7 +37,8 @@ class ServerVote:
                       'second_name': '',
                       'open_key': '',
                       'secret_key':'-1',
-                      'form': []}
+                      'form': [],
+                      'closed':'-1'}
         id = len(self.data_of_constituency) + 1
         dictionary['id'] = id
         dictionary['first_name'] = d['first_name']
@@ -84,15 +86,14 @@ class ServerVote:
         self.socket.send(pickle.dumps((encr_session_key, enc_form)))
 
     def get_status(self, thread):
-        if thread.is_alive():
+        if self.is_end_of_voting:
+            self.socket.send(pickle.dumps('The results are available on the server'))
+        elif thread.is_alive():
             self.socket.send(pickle.dumps('Voting!'))
         else:
             self.socket.send(pickle.dumps('Voting end!'))
 
     def save_results_of_voting(self, msg,enc_session_key, enc_id):
-        #d = {'form': [], 'id': '', 'secret_key': ''}
-        #self.encrypt_results.append(d)
-        #self.socket.send(pickle.dumps('Wait results!'))
         dec_session_key = self.cryptographer.decrypt_session_key(enc_session_key)
         dec_id = self.cryptographer.decrypt_msg(enc_id, dec_session_key)
         index = self.find_index_client(int(dec_id))
@@ -102,12 +103,8 @@ class ServerVote:
             self.socket.send(pickle.dumps('Wait results!'))
         else:
             self.socket.send(pickle.dumps('You have already sent results!'))
-        print(self.data_of_constituency)
 
     def is_all_secret_key(self):
-        #for el in self.data_of_constituency:
-        #    return True
-        #return False
         for el in self.data_of_constituency:
             if el['secret_key'] == '-1':
                 return False
@@ -116,7 +113,6 @@ class ServerVote:
         decr_session_key = self.cryptographer.decrypt_session_key(enc_session_key)
         dec_id = self.cryptographer.decrypt_msg(id, decr_session_key)
         decr_secret_key = self.cryptographer.decrypt_session_key(enc_secret_key)
-        print(dec_id)
         index = self.find_index_client(int(dec_id))
         d = self.data_of_constituency[index]
         d['secret_key'] = decr_secret_key
@@ -130,6 +126,7 @@ class ServerVote:
                 el['FIO'] = self.cryptographer.decrypt_msg(el['FIO'], secr_key)
 
     def print_results_of_voting(self, results):
+        self.is_end_of_voting = True
         print("-"*10)
         print("Results of voting!")
         for key in results.keys():
@@ -147,6 +144,17 @@ class ServerVote:
                rating = str(el['rating']).split("'")
                result_dict[el['FIO']] += int(rating[1])
         self.print_results_of_voting(result_dict)
+
+    def is_all_clients_quit(self):
+        for d in self.data_of_constituency:
+            if d['closed'] == '-1':
+                return False
+        return True
+
+    def add_to_closed(self, id):
+        for d in self.data_of_constituency:
+            if d['id'] == id:
+                d['closed'] = '1'
 
     def go(self, port):
         """ Главный цикл """
@@ -175,6 +183,11 @@ class ServerVote:
             if cmd == 'secret_key':
                 self.save_secret_key(msg, session_key, id)
         self.counting_votes()
+        while self.is_all_clients_quit() == False:
+            cmd, msg, session_key, client_public_key, id = pickle.loads(self.socket.recv())
+            if cmd == 'get_status':
+                self.get_status(t)
+                self.add_to_closed(id)
 
 if __name__ == "__main__":
     server = ServerVote()

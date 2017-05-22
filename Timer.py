@@ -16,7 +16,7 @@ def go(t1):
         str_time = str(my_time).split(':')
         time.sleep(0.9)
         os.system('cls')
-        if float(str_time[2]) > 20:
+        if float(str_time[2]) > 58:
             return TimeIsEndException
 
 def start_timer(time_for_vote):

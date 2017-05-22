@@ -15,6 +15,7 @@ class ClientVote:
         self.is_vote = False
         self.is_end_of_time = False
         self.is_send_results = False
+        self.close_client = False
         self.cryptographer = crypt.Cryptographer()
         f = open('client_private_key.txt','w')
         f.write(str(self.cryptographer.decryption_obj))
@@ -108,6 +109,8 @@ class ClientVote:
 
     def get_status(self):
         ans = self.send_msg('get_status', '-1', '-1', '-1', self.id)
+        if ans == 'The results are available on the server':
+            self.close_client = True
         if ans == 'Voting end!':
             self.is_end_of_time = True
         print(ans)
@@ -127,8 +130,8 @@ class ClientVote:
         while True:
             try:
                 #session_key = Random.new().read(32)
-                #if self.is_end_of_time:
-                #    self.send_secret_key()
+                if self.close_client:
+                    break
                 session_key = self.cryptographer.get_session_key()
                 cmd = input()
                 if cmd == "-reg":
@@ -146,7 +149,7 @@ class ClientVote:
                         print("Voting is not end!")
             except myexc.RunningCommandException:
                 print(myexc.RunningCommandException.text)
-
+        print("Good luck!")
 
 if __name__ == "__main__":
     client = ClientVote('tcp://127.0.0.1:8090')
