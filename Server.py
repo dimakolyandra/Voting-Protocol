@@ -1,8 +1,9 @@
 import zmq
 import pickle
-from Crypto.PublicKey import RSA
-from Crypto.Cipher import AES
-from Crypto import Random
+import Cryptographer as crypt
+import datetime
+import Timer
+import os
 
 class ServerVote:
     def __init__(self):
@@ -10,68 +11,170 @@ class ServerVote:
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.REP)
         self.data_of_constituency = []
-        self.server_private_key = RSA.generate(2048)
-        self.decryption_obj = RSA.importKey(self.server_private_key.exportKey())
+        self.cryptographer = crypt.Cryptographer()
+        self.encrypt_results = []
+        self.form_of_voting = [
+            {'FIO': 'Ivanov Ivan Ivanovich',
+             'rating': ''},
+            {'FIO': 'Sergeev Andrew Andreevich',
+             'rating': ''},
+            {'FIO': 'Putin Vladimir Vladimirovich',
+             'rating': ''}
+        ]
         f = open('server_private_key.txt', 'w')
-        f.write(str(self.server_private_key.exportKey()))
+        f.write(str(self.cryptographer.decryption_obj))
         f.close()
-        self.server_public_key = self.server_private_key.publickey()
         f = open('server_public_key.txt', 'w')
-        f.write(str(self.server_public_key.exportKey()))
+        f.write(str(self.cryptographer.public_key.exportKey()))
         f.close()
+        self.time_of_start = datetime.datetime.now()
 
     def register_in_base(self, d):
         """ Зарегистрировать в базе """
-        dictionary = {'id': '', 'first_name': '', 'second_name': '', 'open_key': ''}
+        dictionary = {'id': '',
+                      'first_name': '',
+                      'second_name': '',
+                      'open_key': '',
+                      'secret_key':'-1',
+                      'form': []}
         id = len(self.data_of_constituency) + 1
         dictionary['id'] = id
         dictionary['first_name'] = d['first_name']
         dictionary['second_name'] = d['second_name']
         dictionary['open_key'] = d['open_key']
+        dictionary['is_voted'] = False
         self.data_of_constituency.append(dictionary)
         return id
 
-    #def encrypt_msg(self, msg, session_key, id):
-    #    """ Зашифровать сообщение"""
-    #    encrypt_obj = RSA.importKey(self.server_open_key.exportKey())
-    #    iv = Random.new().read(16)
-    #    obj = AES.new(session_key, AES.MODE_CFB, iv)
-    #    encrypted_msg = iv + obj.encrypt(msg)
-    #    encr_session_key = encrypt_obj.encrypt(session_key, 0)
-    #    return encr_session_key, encrypted_msg
+    def find_client_open_key(self, id):
+        for el in self.data_of_constituency:
+            if el['id'] == id:
+                return el['open_key']
 
-    def decrypt_msg(self, msg, session_key):
-        """ Расшифровать сообщение """
-        iv = msg[:16]
-        obj = AES.new(session_key, AES.MODE_CFB, iv)
-        decrypt_msg = obj.decrypt(msg)
-        return decrypt_msg[16:]
+    def find_index_client(self, id):
+        for i in range(0, len(self.data_of_constituency)):
+            if self.data_of_constituency[i]['id'] == id:
+                return i
 
-    def begin_register(self,id):
+    def begin_register(self, id):
         if id != -1:
             self.socket.send(pickle.dumps(-1))
         else:
             d = {'first_name': '', 'second_name': ''}
-            self.socket.send(pickle.dumps((d, self.server_public_key)))
+            self.socket.send(pickle.dumps((d, self.cryptographer.public_key)))
 
-    def finish_register(self,msg,session_key,client_public_key):
-        decr_session_key = self.decryption_obj.decrypt(session_key)
-        msg['first_name'] = self.decrypt_msg(msg['first_name'], decr_session_key)
-        msg['second_name'] = self.decrypt_msg(msg['second_name'], decr_session_key)
+    def finish_register(self, msg, session_key, client_public_key, new_session_key):
+        decr_session_key = self.cryptographer.decrypt_session_key(session_key)
+        msg['first_name'] = self.cryptographer.decrypt_msg(msg['first_name'], decr_session_key)
+        msg['second_name'] = self.cryptographer.decrypt_msg(msg['second_name'], decr_session_key)
         msg['open_key'] = client_public_key.exportKey()
         id = self.register_in_base(msg)
-        self.socket.send(pickle.dumps(('ok', id)))
+        encr_id = self.cryptographer.encrypt_msg(repr(id), new_session_key)
+        encr_session_key = self.cryptographer.encrypt_session_key(new_session_key, client_public_key.exportKey())
+        self.socket.send(pickle.dumps(('ok', encr_session_key, encr_id)))
+
+    def begin_voting(self,session_key, id):
+        public_key = self.find_client_open_key(id)
+        enc_form = []
+        for field in self.form_of_voting:
+            enc_dict = {'FIO': '', 'rating': ''}
+            enc_dict['FIO'] = self.cryptographer.encrypt_msg(field['FIO'], session_key)
+            enc_form.append(enc_dict)
+        encr_session_key = self.cryptographer.encrypt_session_key(session_key, public_key)
+        self.socket.send(pickle.dumps((encr_session_key, enc_form)))
+
+    def get_status(self, thread):
+        if thread.is_alive():
+            self.socket.send(pickle.dumps('Voting!'))
+        else:
+            self.socket.send(pickle.dumps('Voting end!'))
+
+    def save_results_of_voting(self, msg,enc_session_key, enc_id):
+        #d = {'form': [], 'id': '', 'secret_key': ''}
+        #self.encrypt_results.append(d)
+        #self.socket.send(pickle.dumps('Wait results!'))
+        dec_session_key = self.cryptographer.decrypt_session_key(enc_session_key)
+        dec_id = self.cryptographer.decrypt_msg(enc_id, dec_session_key)
+        index = self.find_index_client(int(dec_id))
+        need_client = self.data_of_constituency[index]
+        if len(need_client['form']) == 0:
+            need_client['form'] = msg
+            self.socket.send(pickle.dumps('Wait results!'))
+        else:
+            self.socket.send(pickle.dumps('You have already sent results!'))
         print(self.data_of_constituency)
+
+    def is_all_secret_key(self):
+        #for el in self.data_of_constituency:
+        #    return True
+        #return False
+        for el in self.data_of_constituency:
+            if el['secret_key'] == '-1':
+                return False
+
+    def save_secret_key(self,enc_secret_key, enc_session_key, id):
+        decr_session_key = self.cryptographer.decrypt_session_key(enc_session_key)
+        dec_id = self.cryptographer.decrypt_msg(id, decr_session_key)
+        decr_secret_key = self.cryptographer.decrypt_session_key(enc_secret_key)
+        print(dec_id)
+        index = self.find_index_client(int(dec_id))
+        d = self.data_of_constituency[index]
+        d['secret_key'] = decr_secret_key
+        self.socket.send(pickle.dumps('The votes are counted'))
+
+    def decrypt_results(self):
+        for d in self.data_of_constituency:
+            secr_key = d['secret_key']
+            for el in d['form']:
+                el['rating'] = self.cryptographer.decrypt_msg(el['rating'], secr_key)
+                el['FIO'] = self.cryptographer.decrypt_msg(el['FIO'], secr_key)
+
+    def print_results_of_voting(self, results):
+        print("-"*10)
+        print("Results of voting!")
+        for key in results.keys():
+            print(key,": ",results[key])
+        print("-"*10)
+
+    def counting_votes(self):
+        self.decrypt_results()
+        result_dict = {}
+        for d in self.data_of_constituency:
+            for el in d['form']:
+                result_dict[el['FIO']] = 0
+        for d in self.data_of_constituency:
+            for el in d['form']:
+               rating = str(el['rating']).split("'")
+               result_dict[el['FIO']] += int(rating[1])
+        self.print_results_of_voting(result_dict)
 
     def go(self, port):
         """ Главный цикл """
         self.socket.bind(port)
-        while True:
+        t = Timer.start_timer(self.time_of_start)
+        while t.is_alive():
+            new_session_key = self.cryptographer.get_session_key()
             cmd, msg, session_key, client_public_key, id = pickle.loads(self.socket.recv())
             if cmd == 'register_request':
                 self.begin_register(id)
             if cmd == 'finish_register':
-                self.finish_register(msg,session_key,client_public_key)
+                self.finish_register(msg, session_key, client_public_key, new_session_key)
+            if cmd == 'begin_voting':
+                self.begin_voting(new_session_key, id)
+            if cmd == 'vote_result':
+                self.save_results_of_voting(msg, session_key, id)
+            if cmd == 'get_status':
+                self.get_status(t)
+            if cmd == 'secret_key':
+                self.save_secret_key(msg, session_key, id)
+        print("Time of voting is end!")
+        while self.is_all_secret_key() == False:
+            cmd, msg, session_key, client_public_key, id = pickle.loads(self.socket.recv())
+            if cmd == 'get_status':
+                self.get_status(t)
+            if cmd == 'secret_key':
+                self.save_secret_key(msg, session_key, id)
+        self.counting_votes()
 
 if __name__ == "__main__":
     server = ServerVote()
