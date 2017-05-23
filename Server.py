@@ -5,6 +5,7 @@ import datetime
 import Timer
 import os
 
+
 class ServerVote:
     def __init__(self):
         """ Начальная инициализация """
@@ -40,6 +41,8 @@ class ServerVote:
                       'form': [],
                       'closed':'-1'}
         id = len(self.data_of_constituency) + 1
+
+        # Заполняем словарь
         dictionary['id'] = id
         dictionary['first_name'] = d['first_name']
         dictionary['second_name'] = d['second_name']
@@ -49,16 +52,19 @@ class ServerVote:
         return id
 
     def find_client_open_key(self, id):
+        """ Поиск в базе открытого ключа клиента по id """
         for el in self.data_of_constituency:
             if el['id'] == id:
                 return el['open_key']
 
     def find_index_client(self, id):
+        """ Поиск в базе индекса, соответствющего клиенту """
         for i in range(0, len(self.data_of_constituency)):
             if self.data_of_constituency[i]['id'] == id:
                 return i
 
     def begin_register(self, id):
+        """ Начало регистрации для голосования """
         if id != -1:
             self.socket.send(pickle.dumps(-1))
         else:
@@ -66,26 +72,36 @@ class ServerVote:
             self.socket.send(pickle.dumps((d, self.cryptographer.public_key)))
 
     def finish_register(self, msg, session_key, client_public_key, new_session_key):
+        """ Завершение регистрации для голосования """
+        # Расшифровка сессионного ключа
         decr_session_key = self.cryptographer.decrypt_session_key(session_key)
+        # Расшифровка пользовательских данных
         msg['first_name'] = self.cryptographer.decrypt_msg(msg['first_name'], decr_session_key)
         msg['second_name'] = self.cryptographer.decrypt_msg(msg['second_name'], decr_session_key)
         msg['open_key'] = client_public_key.exportKey()
+        # Регистрация в базе
         id = self.register_in_base(msg)
+        # Шифруем сессионным ключом новое id
         encr_id = self.cryptographer.encrypt_msg(repr(id), new_session_key)
+        # Шифруем открытым ключом пользователя сессионный ключ
         encr_session_key = self.cryptographer.encrypt_session_key(new_session_key, client_public_key.exportKey())
         self.socket.send(pickle.dumps(('ok', encr_session_key, encr_id)))
 
     def begin_voting(self,session_key, id):
+        """ Начало голосования """
         public_key = self.find_client_open_key(id)
         enc_form = []
+        # Шифруем данные о кандидатах сессионным ключом
         for field in self.form_of_voting:
             enc_dict = {'FIO': '', 'rating': ''}
             enc_dict['FIO'] = self.cryptographer.encrypt_msg(field['FIO'], session_key)
             enc_form.append(enc_dict)
+        # Шифруем сессионный ключ
         encr_session_key = self.cryptographer.encrypt_session_key(session_key, public_key)
         self.socket.send(pickle.dumps((encr_session_key, enc_form)))
 
     def get_status(self, thread):
+        """ Возвращает статус голосования """
         if self.is_end_of_voting:
             self.socket.send(pickle.dumps('The results are available on the server'))
         elif thread.is_alive():
@@ -93,11 +109,14 @@ class ServerVote:
         else:
             self.socket.send(pickle.dumps('Voting end!'))
 
-    def save_results_of_voting(self, msg,enc_session_key, enc_id):
+    def save_results_of_voting(self, msg, enc_session_key, enc_id):
+        """ Расшифровка и сохранение результатов голосования """
+        # Расшифровка сессионного ключа, id клиента и поиск его в базе
         dec_session_key = self.cryptographer.decrypt_session_key(enc_session_key)
         dec_id = self.cryptographer.decrypt_msg(enc_id, dec_session_key)
         index = self.find_index_client(int(dec_id))
         need_client = self.data_of_constituency[index]
+        # Сохранение результатов голосования в базе
         if len(need_client['form']) == 0:
             need_client['form'] = msg
             self.socket.send(pickle.dumps('Wait results!'))
@@ -105,11 +124,17 @@ class ServerVote:
             self.socket.send(pickle.dumps('You have already sent results!'))
 
     def is_all_secret_key(self):
+
+        """ Проверка, прислали ли все клиенты
+            секретные ключи
+
+        """
         for el in self.data_of_constituency:
             if el['secret_key'] == '-1':
                 return False
 
     def save_secret_key(self,enc_secret_key, enc_session_key, id):
+        """ Сохранение секретных ключей """
         decr_session_key = self.cryptographer.decrypt_session_key(enc_session_key)
         dec_id = self.cryptographer.decrypt_msg(id, decr_session_key)
         decr_secret_key = self.cryptographer.decrypt_session_key(enc_secret_key)
@@ -119,6 +144,7 @@ class ServerVote:
         self.socket.send(pickle.dumps('The votes are counted'))
 
     def decrypt_results(self):
+        """ Расшифровка результатов голосования """
         for d in self.data_of_constituency:
             secr_key = d['secret_key']
             for el in d['form']:
@@ -126,6 +152,7 @@ class ServerVote:
                 el['FIO'] = self.cryptographer.decrypt_msg(el['FIO'], secr_key)
 
     def print_results_of_voting(self, results):
+        """ Вывод на сервере результатов голосования """
         self.is_end_of_voting = True
         print("-"*10)
         print("Results of voting!")
@@ -134,6 +161,7 @@ class ServerVote:
         print("-"*10)
 
     def counting_votes(self):
+        """  Подсчёт голосов """
         self.decrypt_results()
         result_dict = {}
         for d in self.data_of_constituency:
@@ -146,12 +174,16 @@ class ServerVote:
         self.print_results_of_voting(result_dict)
 
     def is_all_clients_quit(self):
+        """ Проверка, вышли ли все клиенты """
         for d in self.data_of_constituency:
             if d['closed'] == '-1':
                 return False
         return True
 
     def add_to_closed(self, id):
+        """ Добавить клиента в закрытые,
+            при его выходе
+        """
         for d in self.data_of_constituency:
             if d['id'] == id:
                 d['closed'] = '1'

@@ -7,6 +7,7 @@ import RunningCommandException as myexc
 class ClientVote:
 
     def __init__(self, port):
+        # Начальная инициализация
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.REQ)
         self.socket.connect(port)
@@ -55,6 +56,7 @@ class ClientVote:
             self.id = int(dec_id)
 
     def begin_voting(self, session_key):
+        """ Начало голосования """
         if self.is_vote:
             print('You already start voting!')
             return
@@ -73,12 +75,14 @@ class ClientVote:
 
 
     def is_right_rating(self, rating):
+        """  Проверка на правильность ввода """
         if rating.isdigit() and int(rating) > 0 and int(rating) < 6:
             return True
         else:
             return False
 
     def fill_form(self, form):
+        """ Заполнение формы голосования """
         print('For each candidate enter range from 1 to 5!')
         for el in form:
             print('FIO: ', el['FIO'])
@@ -91,6 +95,7 @@ class ClientVote:
         return form
 
     def send_result_of_voting(self, session_key):
+        """ Отсылка результатов голосования на сервер"""
         if self.is_send_results == True:
             print("Time of voting is end!")
             return
@@ -108,6 +113,7 @@ class ClientVote:
         print(ans)
 
     def get_status(self):
+        """ Получить статус голосования """
         ans = self.send_msg('get_status', '-1', '-1', '-1', self.id)
         if ans == 'The results are available on the server':
             self.close_client = True
@@ -116,6 +122,7 @@ class ClientVote:
         print(ans)
 
     def send_secret_key(self, session_key):
+        """ Отправить секретный ключ """
         if self.is_send_results == False:
             print('You did not start voting!')
             return
@@ -129,7 +136,6 @@ class ClientVote:
         """ Основной цикл работы"""
         while True:
             try:
-                #session_key = Random.new().read(32)
                 if self.close_client:
                     break
                 session_key = self.cryptographer.get_session_key()
